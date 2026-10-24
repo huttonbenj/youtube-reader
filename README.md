@@ -1,6 +1,8 @@
 # youtube-reader
 
-Lets Claude read YouTube. Give Claude a video, a channel, a playlist or a search, and it saves the transcripts and video details, plus top comments when they help, to a folder on your computer. Claude reads those files to answer you, and since they stay on disk, later questions can cover everything you've saved.
+Gives Claude what YouTube videos say. Point Claude at a video, a channel, a playlist or a search, and it saves each video's transcript (everything that's said, from the captions), its details (title, channel, date, views, chapters and description) and, when they help, the top comments, as text files on your computer. Claude reads those files to answer you, and since they stay on disk, later questions can cover everything you've saved.
+
+It works from the captions, so it knows what was said, not what's shown on screen. No video or audio is downloaded.
 
 Things you can ask:
 
