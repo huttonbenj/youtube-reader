@@ -1,0 +1,18 @@
+{
+  "name": "youtube-reader",
+  "displayName": "YouTube Reader",
+  "description": "Lets Claude read YouTube. Saves transcripts, comments and video details to a local library so Claude can summarize, fact-check and compare across videos, channels and searches.",
+  "author": {
+    "name": "Ben Hutton",
+    "url": "https://huttontechnologies.com"
+  },
+  "repository": "https://github.com/huttonbenj/youtube-reader",
+  "license": "MIT",
+  "keywords": [
+    "youtube",
+    "transcripts",
+    "comments",
+    "research",
+    "fact-check"
+  ]
+}

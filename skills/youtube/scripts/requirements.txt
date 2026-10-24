@@ -1,0 +1,2 @@
+yt-dlp[default,curl-cffi]>=2026.8.19
+youtube-transcript-api>=1.2.4

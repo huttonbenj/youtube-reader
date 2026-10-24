@@ -1,0 +1,75 @@
+#!/bin/sh
+# Runs yt.py in a Python environment that it creates on first use.
+#
+# Works the same whether this skill is installed as a plugin, linked into
+# ~/.claude/skills, or run from a checkout. Nothing is written next to the
+# code: the environment, the library and the watchlists live in $YT_HOME
+# (default ~/.youtube-reader), so they survive plugin updates.
+set -e
+
+# Resolve a symlink to this file so the script and requirements are found beside the real one.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *) SELF="$(dirname "$SELF")/$LINK" ;;
+  esac
+done
+DIR="$(cd "$(dirname "$SELF")" && pwd -P)"
+
+YT_HOME="${YT_HOME:-$HOME/.youtube-reader}"
+VENV="$YT_HOME/venv"
+PY="$VENV/bin/python"
+REQS="$DIR/requirements.txt"
+STAMP="$VENV/.requirements-installed"   # holds a checksum of the requirements last installed
+WANT="$(cksum < "$REQS")"
+
+needs_setup() {
+  [ ! -x "$PY" ] || [ "$(cat "$STAMP" 2>/dev/null)" != "$WANT" ]
+}
+
+if needs_setup; then
+  BASE=""
+  for cand in python3 python3.14 python3.13 python3.12 python3.11 python3.10; do
+    if command -v "$cand" >/dev/null 2>&1 \
+       && "$cand" -c 'import sys, venv; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+      BASE="$cand"
+      break
+    fi
+  done
+  if [ -z "$BASE" ]; then
+    echo "yt: needs Python 3.10 or newer, with the venv module, on your PATH (on Debian/Ubuntu: sudo apt install python3-venv)." >&2
+    exit 1
+  fi
+
+  # One setup at a time: parallel first runs (several Claude subagents) would otherwise rebuild over each other.
+  mkdir -p "$YT_HOME"
+  LOCK="$YT_HOME/.setup.lock"
+  waited=0
+  until mkdir "$LOCK" 2>/dev/null; do
+    waited=$((waited + 1))
+    if [ "$waited" -gt 600 ]; then
+      echo "yt: another setup has held $LOCK for 10 minutes; if nothing is running, remove that directory." >&2
+      exit 1
+    fi
+    sleep 1
+  done
+  trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+
+  if needs_setup; then  # re-check: whoever held the lock may have finished the job
+    echo "yt: setting up the Python environment in $VENV (takes up to a minute)…" >&2
+    if [ ! -x "$PY" ]; then
+      rm -rf "$VENV"
+      "$BASE" -m venv "$VENV"
+    fi
+    "$PY" -m pip install -q --upgrade pip
+    "$PY" -m pip install -q -r "$REQS"
+    printf '%s\n' "$WANT" > "$STAMP"
+  fi
+  rmdir "$LOCK" 2>/dev/null || true
+  trap - EXIT INT TERM
+fi
+
+export YT_HOME
+exec "$PY" "$DIR/yt.py" "$@"

@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+# Only present if YT_HOME points at this checkout.
+library/
