@@ -70,7 +70,9 @@ Two open-source libraries do the downloading. [yt-dlp](https://github.com/yt-dlp
 
 It prefers captions the creator uploaded, then YouTube's auto-generated ones. For a video in another language, it saves YouTube's English translation when there is one; each file's `captions:` line says which you got.
 
-Videos you've already saved are reused instead of downloaded again; `--refresh` gets a fresh copy. The tool pauses between requests and stops if YouTube starts refusing them.
+Videos you've already saved are reused instead of downloaded again; `--refresh` gets a fresh copy.
+
+It's deliberately gentle with YouTube, to avoid getting your connection rate-limited. It waits a few seconds between videos, and if YouTube pushes back, it waits a minute and tries once more before stopping. Only one fetch runs at a time, even with several Claude sessions open; the others wait their turn. A batch of 30 videos takes a few minutes.
 
 It reads captions and comments that YouTube shows publicly, and it's meant for personal research. You're responsible for using it in line with YouTube's Terms of Service.
 
@@ -88,7 +90,7 @@ No proxy is used unless you set one.
 ## If something breaks
 
 - YouTube changes things every few months. Run `yt update` first.
-- If it stops and says YouTube is refusing requests, wait 30 to 60 minutes and try again. If that happens on the very first video, the connection is probably blocked outright; see [Running it somewhere else](#running-it-somewhere-else).
+- If it stops and says YouTube is refusing requests, wait about an hour before trying again, and don't open YouTube in a browser on the same connection meanwhile; that keeps the block going. If it happens on the very first video, the connection is probably blocked outright; see [Running it somewhere else](#running-it-somewhere-else).
 - Auto-generated captions often misspell names, so search your library by topic rather than by person.
 
 ## Development

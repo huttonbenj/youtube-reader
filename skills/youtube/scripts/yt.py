@@ -13,15 +13,18 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
 import html
 import json
 import os
+import random
 import re
 import subprocess
 import sys
 import tempfile
 import time
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -86,7 +89,9 @@ def utc_today() -> date:
 
 PREFERRED_LANGS = ["en", "en-US", "en-GB", "en-CA", "en-AU"]
 PARAGRAPH_SECONDS = 30
-TRANSCRIPT_PAUSE = 1.0  # between caption requests, to stay under YouTube's rate limits
+# Pacing, to stay under YouTube's rate limits. Pauses are randomized so requests don't arrive on a beat.
+PAUSE_RANGE = (2.5, 5.0)  # seconds between videos
+BLOCK_WAIT = 60  # seconds to wait before one retry when YouTube pushes back
 DEFAULT_COMMENTS = 100
 TOKENS_PER_WORD = 1.35
 
@@ -233,7 +238,9 @@ def stream_details(ids: list[str], comments: int, cutoff: date | None, newest_fi
         "--ignore-errors",
         "--no-warnings",
         "--sleep-requests",
-        "0.5",
+        "1",
+        "--retry-sleep",
+        "extractor:exp=5:60",
     ]
     if comments:
         cmd += [
@@ -295,6 +302,33 @@ def fetch_transcript(api: YouTubeTranscriptApi, vid: str) -> tuple[list, str]:
             if isinstance(e, (IpBlocked, RequestBlocked)):
                 raise
     return list(base.fetch()), f"{kind} ({base.language_code})"
+
+
+def fetch_with_retry(api: YouTubeTranscriptApi, vid: str) -> tuple[list, str]:
+    """fetch_transcript, but when YouTube pushes back, wait a minute and try once more before giving up."""
+    try:
+        return fetch_transcript(api, vid)
+    except (IpBlocked, RequestBlocked):
+        log(f"  YouTube is pushing back; waiting {BLOCK_WAIT} seconds before one more try…")
+        time.sleep(BLOCK_WAIT)
+        return fetch_transcript(api, vid)
+
+
+def pause() -> None:
+    time.sleep(random.uniform(*PAUSE_RANGE))
+
+
+@contextmanager
+def fetch_lock():
+    """One fetch at a time across every process, so several Claude sessions don't hit YouTube at once."""
+    YT_HOME.mkdir(parents=True, exist_ok=True)
+    with open(YT_HOME / ".fetch.lock", "w") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log("Another fetch is running (probably another Claude session); waiting for it to finish…")
+            fcntl.flock(f, fcntl.LOCK_EX)
+        yield
 
 
 def paragraphs(snippets: list) -> list[tuple[float, str]]:
@@ -525,7 +559,7 @@ def collect(ids: list[str], *, comments: int, days: int | None, newest_first: bo
             return
         log(f"  [{len(seen)}/{len(to_fetch)}] {info.get('title')}")
         try:
-            snippets, captions = fetch_transcript(api, vid)
+            snippets, captions = fetch_with_retry(api, vid)
         except (IpBlocked, RequestBlocked) as e:
             raise Blocked(type(e).__name__, results) from e
         except CouldNotRetrieveTranscript as e:
@@ -539,7 +573,7 @@ def collect(ids: list[str], *, comments: int, days: int | None, newest_first: bo
         if comments:
             note = f"{write_comments(path, info)} comments"
         results.append(Result(vid, "new", read_meta(path), note))
-        time.sleep(TRANSCRIPT_PAUSE)
+        pause()
 
     log(f"  reading details for {len(to_fetch)} video(s)…")
     errors = stream_details(to_fetch, comments, cutoff, newest_first, on_info)
@@ -661,13 +695,15 @@ def fetch_and_report(sources: list[str], a: argparse.Namespace) -> int:
     if PROXY_URL:
         log("using the proxy from the environment")
     try:
-        results = run_sources(sources, a)
+        with fetch_lock():
+            results = run_sources(sources, a)
     except Blocked as e:
         if e.partial:
             print_results(e.partial)
             print()
         print(f"STOPPED: YouTube is refusing requests from this connection ({redact(str(e))}).")
-        print("On a home connection that's a rate limit: wait 30–60 minutes and try again.")
+        print("On a home connection that's a rate limit: wait about an hour before any more YouTube requests,")
+        print("including opening YouTube in a browser on this connection, which keeps the block going.")
         print("On a cloud server or VPN, waiting won't help; set a residential proxy (see the README).")
         return 2
     print_results(results)
@@ -740,7 +776,8 @@ def cmd_ls(a):
 
 def cmd_update(a):
     pip = [sys.executable, "-m", "pip", "install", "-q", "-U", "-r", str(REQUIREMENTS)]
-    code = subprocess.call(pip)
+    with fetch_lock():  # don't swap packages out from under a fetch in another session
+        code = subprocess.call(pip)
     subprocess.call([*YTDLP, "--version"])
     return code
 

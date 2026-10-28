@@ -330,7 +330,8 @@ def test_write_comments_keeps_top_level_only_and_tags(yt, tmp_path):
 @pytest.fixture
 def fake_youtube(yt, tmp_path, monkeypatch):
     monkeypatch.setattr(yt, "LIBRARY", tmp_path / "library")
-    monkeypatch.setattr(yt, "TRANSCRIPT_PAUSE", 0)
+    monkeypatch.setattr(yt, "PAUSE_RANGE", (0, 0))
+    monkeypatch.setattr(yt, "BLOCK_WAIT", 0)
     monkeypatch.setattr(yt, "YouTubeTranscriptApi", lambda proxy_config=None: object())
     videos = {
         "aaaaaaaaaaa": {
@@ -420,8 +421,11 @@ def test_collect_keeps_going_when_one_video_fails(yt, fake_youtube, monkeypatch)
 
 
 def test_collect_reports_partial_results_when_blocked(yt, fake_youtube, monkeypatch):
+    tries = {"bbbbbbbbbbb": 0}
+
     def blocked(api, vid):
         if vid == "bbbbbbbbbbb":
+            tries[vid] += 1
             raise yt.IpBlocked(vid)
         return [snip("ok", 0.0)], "auto (en)"
 
@@ -429,6 +433,41 @@ def test_collect_reports_partial_results_when_blocked(yt, fake_youtube, monkeypa
     with pytest.raises(yt.Blocked) as caught:
         run_collect(yt, ["aaaaaaaaaaa", "bbbbbbbbbbb"])
     assert [(x.id, x.status) for x in caught.value.partial] == [("aaaaaaaaaaa", "new")]
+    assert tries["bbbbbbbbbbb"] == 2  # one patient retry, then it stops
+
+
+def test_collect_recovers_when_a_block_clears_on_retry(yt, fake_youtube, monkeypatch):
+    tries = {"aaaaaaaaaaa": 0}
+
+    def once(api, vid):
+        tries[vid] = tries.get(vid, 0) + 1
+        if vid == "aaaaaaaaaaa" and tries[vid] == 1:
+            raise yt.RequestBlocked(vid)
+        return [snip("ok", 0.0)], "auto (en)"
+
+    monkeypatch.setattr(yt, "fetch_transcript", once)
+    r = run_collect(yt, ["aaaaaaaaaaa", "bbbbbbbbbbb"])
+    assert [(x.id, x.status) for x in r] == [("aaaaaaaaaaa", "new"), ("bbbbbbbbbbb", "new")]
+    assert tries["aaaaaaaaaaa"] == 2
+
+
+def test_fetch_lock_lets_only_one_fetch_run_at_a_time(yt, tmp_path, monkeypatch):
+    import fcntl
+
+    monkeypatch.setattr(yt, "YT_HOME", tmp_path)
+    with yt.fetch_lock(), open(tmp_path / ".fetch.lock", "w") as other, pytest.raises(BlockingIOError):
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with open(tmp_path / ".fetch.lock", "w") as other:
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)  # free again once the fetch is done
+
+
+def test_pause_stays_in_range(yt, monkeypatch):
+    waits = []
+    monkeypatch.setattr(yt.time, "sleep", waits.append)
+    monkeypatch.setattr(yt, "PAUSE_RANGE", (2.5, 5.0))
+    for _ in range(50):
+        yt.pause()
+    assert all(2.5 <= w <= 5.0 for w in waits) and len(set(waits)) > 1
 
 
 def test_collect_date_cutoff_breaks_on_newest_first_sources(yt, fake_youtube):
